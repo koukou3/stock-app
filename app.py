@@ -89,12 +89,11 @@ def check_ultimate_swing(ticker_symbol):
         ticker = yf.Ticker(ticker_symbol)
         df_daily = ticker.history(period="1y", interval="1d")
         
-        # クラウド特有の「出来高0」や「欠損」のバグデータを消す
         df_daily = df_daily[df_daily['Volume'] > 0]
         df_daily = df_daily.dropna(subset=['Close', 'Volume'])
         
         if df_daily.empty or len(df_daily) < 75:
-            return False, None, None, None, None, None, None
+            return False, None, None, None, None
             
         df_daily['5MA'] = df_daily['Close'].rolling(window=5).mean()
         df_daily['20MA'] = df_daily['Close'].rolling(window=20).mean()
@@ -110,7 +109,6 @@ def check_ultimate_swing(ticker_symbol):
         last = df_daily.iloc[-1]
         prev = df_daily.iloc[-2] 
         
-        # 条件判定
         trend_daily = (last['Close'] > last['5MA'] > last['20MA']) and (last['Close'] > last['75MA'])
         today_is_bullish = last['Close'] > last['Open']
         prev_is_bullish = prev['Close'] > prev['Open']
@@ -126,18 +124,16 @@ def check_ultimate_swing(ticker_symbol):
         df_weekly = df_weekly.dropna(subset=['Close'])
 
         if df_weekly.empty or len(df_weekly) < 20:
-            return False, None, None, None, None, None, None
+            return False, None, None, None, None
 
         last_w = df_weekly.iloc[-1]
         df_weekly['5MA'] = df_weekly['Close'].rolling(window=5).mean()
         df_weekly['20MA'] = df_weekly['Close'].rolling(window=20).mean()
         trend_weekly = (last_w['Close'] > df_weekly['5MA'].iloc[-1] > df_weekly['20MA'].iloc[-1])
 
-        # 条件に合わない場合（ここで弾かれない限り合格！）
         if not (trend_daily and trend_weekly and candle_ok and vol_ok and rsi_safe and dev_safe and bb_safe) or last_trading_value < 1000000000:
-            return False, None, None, None, None, None, None
+            return False, None, None, None, None
 
-        # ★★★ ここが原因でした！例外処理を独立させて、ブロックされても合格を取り消さない！ ★★★
         name = "不明"
         sector = "不明"
         earnings_date = "不明"
@@ -147,7 +143,6 @@ def check_ultimate_swing(ticker_symbol):
             name = info_data.get('shortName') or '不明'
             sector = info_data.get('sector') or '不明'
         except Exception:
-            # 取得できなくてもスルーする（合格は維持）
             pass
             
         try:
@@ -156,17 +151,15 @@ def check_ultimate_swing(ticker_symbol):
                 earnings_date = cal['Earnings Date'][0].strftime('%Y/%m/%d')
         except Exception:
             pass
-        # ★★★ 修正はここまで ★★★
 
         info_text = f"終値:{last['Close']:,.1f}円 (RSI:{last['RSI']:.0f}%)"
         if not today_is_bullish and candle_ok:
             info_text += " ※GU特例"
             
-        return True, info_text, name, sector, earnings_date, last['Close'], last['RSI']
+        return True, info_text, name, sector, earnings_date
 
     except Exception:
-        # 株価データ自体が取れなかった場合のみ不合格にする
-        return False, None, None, None, None, None, None
+        return False, None, None, None, None
 
 # --- UIと実行 ---
 if st.button('🔍 スキャン開始', type='primary', use_container_width=True):
@@ -178,23 +171,24 @@ if st.button('🔍 スキャン開始', type='primary', use_container_width=True
     for i, code in enumerate(tickers):
         my_bar.progress((i + 1) / total, text=f"スキャン中... [{i+1}/{total}] {code}")
         
-        is_match, info, name, sector, e_date, price, rsi = check_ultimate_swing(code)
+        is_match, info, name, sector, e_date = check_ultimate_swing(code)
         
         if is_match:
-            results.append({
-                "コード": code.replace(".T", ""),
-                "銘柄名": name,
-                "詳細情報": info,
-                "セクター": sector,
-                "決算予定": e_date
-            })
-            status_area.success(f"⭐ 発見: {code} {name}")
+            # スマホでコピーしやすいテキストを作成
+            clean_code = code.replace('.T', '')
+            results.append(f"⭐ {clean_code} {name} [{sector}] 📅決算:{e_date} 【{info}】")
+            status_area.success(f"⭐ 発見: {clean_code} {name}")
             
     my_bar.empty()
     st.markdown("---")
     
     if results:
         st.subheader(f"📋 厳選銘柄リスト ({len(results)}件)")
-        st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
+        
+        # 💡 コピー専用のテキストブロックを作成（枠の右上にコピーボタンが出ます）
+        st.markdown("**👇 右上の四角いマーク（コピーボタン）を押すと全件コピーできます！**")
+        copy_text = "\n".join(results)
+        st.code(copy_text, language="text")
+        
     else:
         st.info("現在、すべての条件を満たすお宝銘柄はありません。資金を温存しましょう。")
