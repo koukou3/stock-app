@@ -1,3 +1,4 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import time
@@ -6,6 +7,13 @@ from datetime import datetime
 
 # yfinanceの一部の警告を非表示にする
 warnings.filterwarnings('ignore')
+
+# ページ設定（iPhoneで見やすいように）
+st.set_page_config(page_title="Ultimate Stock Screener", page_icon="📈", layout="wide")
+
+st.title("📈 アルティメット・スクリーナー")
+st.caption("対象：日経225＋JPX400＋プライム・スタンダード主力（全約580銘柄）")
+st.caption("条件：日/週PO ＋ 売買代金10億以上 ＋ RSI<75 ＋ BB+2σ以内 ＋ (陽線 or 前日陽線&GU)")
 
 # 母集団：日経225 + JPX400 + プライム・スタンダード主力（全約580銘柄）
 tickers = sorted(list(set([
@@ -70,6 +78,7 @@ tickers = sorted(list(set([
     "6035.T", "6036.T", "6058.T", "6080.T", "6095.T"
 ])))
 
+# コスケさんの計算ロジック（完全一致）
 def calculate_rsi(df, period=14):
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -172,66 +181,57 @@ def check_ultimate_swing(ticker_symbol):
     except Exception as e:
         return False, "データ取得エラー", None, None, None
 
-
-if __name__ == "__main__":
-    print("【スイング・アルティメット：決算日取得＆保存機能 搭載版】スクリーニング開始...")
-    print("対象：日経225＋JPX400＋プライム・スタンダード主力（全約580銘柄）")
-    print("条件：日/週PO ＋ 売買代金10億以上 ＋ RSI<75 ＋ BB+2σ以内 ＋ (陽線 or 前日陽線&GU)\n")
+# --- アプリの画面（UI）と実行部分 ---
+if st.button('🔍 スキャン開始', type='primary', use_container_width=True):
+    results = []
     
-    matched = []
+    # 進行状況を画面に出す準備
+    my_bar = st.progress(0, text="準備中...")
+    status_area = st.empty()
+    
     total = len(tickers)
-    
     start_time = time.time()
     
     for i, code in enumerate(tickers):
-        print(f"[{i+1}/{total}] {code}", end=" ", flush=True)
+        # バーを更新
+        my_bar.progress((i + 1) / total, text=f"スキャン中... [{i+1}/{total}] {code}")
         
-        # 判定実行
+        # ★ ここがターミナルと全く同じ実行部分です
         is_match, info, name, sector, e_date = check_ultimate_swing(code)
         
         if is_match:
-            # 画面への表示（業種と決算日を追加）
-            display_text = f" ✅ {name} [{sector}] 📅決算:{e_date} | {info}"
-            print(display_text)
-            # 保存用リストに追加
-            matched.append(f"{code} {name} [{sector}] 📅決算:{e_date} 【{info}】")
-        else:
-            print(f" ❌ {info}")
+            # 合格した銘柄だけリストに追加（表用データ）
+            results.append({
+                "コード": code.replace(".T", ""),
+                "銘柄名": name,
+                "詳細情報": info, # あなたのターミナルと同じ文字列が入ります
+                "セクター": sector,
+                "決算予定": e_date
+            })
+            status_area.success(f"✅ {name} [{sector}] 📅決算:{e_date} | {info}")
             
-        time.sleep(0.05)
-        
     end_time = time.time()
-    elapsed_time = end_time - start_time
     
-    # === スキャン完了後の処理 ===
-    print("\n" + "="*70)
-    print("【厳選銘柄リスト】")
-    if matched:
-        for m in matched: 
-            print(f"⭐ {m}")
-    else: 
-        print("現在、すべての条件を満たすお宝銘柄はありません。資金を温存しましょう。")
-    print("="*70)
-    print(f"スキャン完了（所要時間: {elapsed_time:.1f}秒）\n")
-
-    # === インタラクティブ保存機能（ボタンの代わり） ===
-    if matched:
-        # ユーザーに入力を促す
-        ans = input("この結果をテキストファイルに保存しますか？ (y/n): ")
-        if ans.lower() in ['y', 'yes']:
-            now = datetime.now()
-            filename = f"アルティメット結果_{now.strftime('%Y%m%d_%H%M')}.txt"
-            
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(f"実行日時: {now.strftime('%Y/%m/%d %H:%M')}\n")
-                f.write("【スイング・アルティメット：抽出結果】\n")
-                f.write("="*70 + "\n")
-                for m in matched:
-                    f.write(f"⭐ {m}\n")
-                f.write("="*70 + "\n")
-                f.write("※業種(セクター)は米国Yahoo! Financeの英語表記となります。\n")
-                f.write("※決算日が「不明」の場合はSBI証券等で個別にご確認ください。\n")
-                
-            print(f"👉 完了！カレントディレクトリに '{filename}' を作成しました！")
-        else:
-            print("保存せずに終了します。お疲れ様でした！")
+    my_bar.empty() # 終わったらバーを消す
+    st.write(f"⏱️ 所要時間: {end_time - start_time:.1f}秒")
+    
+    st.markdown("---")
+    
+    if results:
+        st.subheader(f"📋 【厳選銘柄リスト】 ({len(results)}件)")
+        df_res = pd.DataFrame(results)
+        st.dataframe(df_res, use_container_width=True, hide_index=True)
+        
+        # ターミナルで `y` を押して保存していた機能の代わり
+        now = datetime.now()
+        filename = f"アルティメット結果_{now.strftime('%Y%m%d_%H%M')}.csv"
+        csv = df_res.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 結果をCSVで保存",
+            data=csv,
+            file_name=filename,
+            mime="text/csv",
+            use_container_width=True
+        )
+    else:
+        st.info("現在、すべての条件を満たすお宝銘柄はありません。資金を温存しましょう。")
