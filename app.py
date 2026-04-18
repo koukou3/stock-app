@@ -3,80 +3,17 @@ import yfinance as yf
 import pandas as pd
 import time
 import warnings
-from datetime import datetime
 
-# ページ設定（iPhoneで見やすいようにワイドモードに）
-st.set_page_config(page_title="Ultimate Stock Screener", page_icon="📈")
+# yfinanceの一部の警告を非表示にする
+warnings.filterwarnings('ignore')
 
-# タイトルと説明
+# ページ設定（iPhoneで見やすいように）
+st.set_page_config(page_title="Ultimate Stock Screener", page_icon="📈", layout="wide")
+
 st.title("📈 アルティメット・スクリーナー")
-st.caption("対象：日経225＋JPX400＋プライム・スタンダード主力（約580銘柄）")
+st.caption("対象：日経225＋JPX400＋プライム・スタンダード主力（全約580銘柄）")
+st.caption("条件：日/週PO ＋ 売買代金10億以上 ＋ RSI<75 ＋ BB+2σ以内 ＋ (陽線 or 前日陽線&GU)")
 
-# --- ロジック部分（既存のロジックを統合） ---
-def calculate_rsi(df, period=14):
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def check_ultimate_swing(ticker_symbol):
-    try:
-        ticker = yf.Ticker(ticker_symbol)
-        df_daily = ticker.history(period="1y", interval="1d")
-        if df_daily.empty or len(df_daily) < 75:
-            return False, "データ不足", None, None, None
-            
-        df_daily['5MA'] = df_daily['Close'].rolling(window=5).mean()
-        df_daily['20MA'] = df_daily['Close'].rolling(window=20).mean()
-        df_daily['75MA'] = df_daily['Close'].rolling(window=75).mean()
-        df_daily['RSI'] = calculate_rsi(df_daily)
-        df_daily['20MA_Dev'] = (df_daily['Close'] - df_daily['20MA']) / df_daily['20MA'] * 100
-        df_daily['Vol_Avg'] = df_daily['Volume'].rolling(window=20).mean()
-        
-        last_trading_value = df_daily['Close'].iloc[-1] * df_daily['Volume'].iloc[-1]
-        std = df_daily['Close'].rolling(window=20).std()
-        df_daily['Upper_2sigma'] = df_daily['20MA'] + (std * 2)
-        
-        last = df_daily.iloc[-1]
-        prev = df_daily.iloc[-2]
-        
-        trend_daily = (last['Close'] > last['5MA'] > last['20MA']) and (last['Close'] > last['75MA'])
-        candle_ok = (last['Close'] > last['Open']) or ((prev['Close'] > prev['Open']) and (last['Open'] > prev['Close']))
-        vol_ok = last['Volume'] > last['Vol_Avg']
-        rsi_safe = last['RSI'] < 75
-        dev_safe = last['20MA_Dev'] < 10
-        bb_safe = last['Close'] < last['Upper_2sigma']
-
-        df_weekly = ticker.history(period="1y", interval="1wk")
-        if df_weekly.empty or len(df_weekly) < 20: return False, "週足不足", None, None, None
-        last_w = df_weekly.iloc[-1]
-        df_weekly['5MA'] = df_weekly['Close'].rolling(window=5).mean()
-        df_weekly['20MA'] = df_weekly['Close'].rolling(window=20).mean()
-        trend_weekly = (last_w['Close'] > df_weekly['5MA'].iloc[-1] > df_weekly['20MA'].iloc[-1])
-
-        if not (trend_daily and trend_weekly): return False, "トレンド未達", None, None, None
-        if last_trading_value < 1000000000: return False, "流動性不足", None, None, None
-        if not candle_ok: return False, "形状不適合", None, None, None
-        if not vol_ok: return False, "活況不足", None, None, None
-        if not (rsi_safe and dev_safe and bb_safe): return False, "過熱/乖離過大", None, None, None
-
-        info_data = ticker.info
-        name = info_data.get('shortName') or '不明'
-        sector = info_data.get('sector') or '不明'
-        
-        earnings_date = "不明"
-        try:
-            cal = ticker.calendar
-            if isinstance(cal, dict) and 'Earnings Date' in cal:
-                earnings_date = cal['Earnings Date'][0].strftime('%Y/%m/%d')
-        except: pass
-            
-        return True, f"{last['Close']:,.0f}円", name, sector, earnings_date
-    except:
-        return False, "エラー", None, None, None
-
-# --- UI部分 ---
 # 母集団：日経225 + JPX400 + プライム・スタンダード主力（全約580銘柄）
 tickers = sorted(list(set([
     "1332.T", "1414.T", "1605.T", "1719.T", "1720.T", "1721.T", "1801.T", "1802.T", "1803.T", "1808.T",
@@ -122,7 +59,6 @@ tickers = sorted(list(set([
     "9434.T", "9501.T", "9502.T", "9503.T", "9506.T", "9508.T", "9509.T", "9531.T", "9532.T", "9552.T",
     "9602.T", "9613.T", "9627.T", "9684.T", "9697.T", "9719.T", "9735.T", "9766.T", "9843.T", "9962.T",
     "9983.T", "9984.T", "9989.T",
-    
     # --- 追加銘柄（人気中小型株・グロース・スタンダード主力） ---
     "2698.T", "2782.T", "3053.T", "3196.T", "3397.T", "3543.T", "7550.T", "7616.T", "8200.T", "9873.T",
     "9861.T", "9842.T", "7421.T", "7522.T", "7581.T", "7649.T", "9936.T", "9948.T", "9279.T", "3561.T",
@@ -139,35 +75,143 @@ tickers = sorted(list(set([
     "4722.T", "4733.T", "4745.T", "4763.T", "4828.T", "4849.T", "4974.T", "4980.T", "5949.T", "5988.T",
     "6035.T", "6036.T", "6058.T", "6080.T", "6095.T"
 ])))
-if st.button('🔍 スキャン開始', type='primary'):
+
+def calculate_rsi(df, period=14):
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def check_ultimate_swing(ticker_symbol):
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        df_daily = ticker.history(period="1y", interval="1d")
+        
+        if df_daily.empty or len(df_daily) < 75:
+            return False, None, None, None, None, None
+            
+        df_daily['5MA'] = df_daily['Close'].rolling(window=5).mean()
+        df_daily['20MA'] = df_daily['Close'].rolling(window=20).mean()
+        df_daily['75MA'] = df_daily['Close'].rolling(window=75).mean()
+        df_daily['RSI'] = calculate_rsi(df_daily)
+        df_daily['20MA_Dev'] = (df_daily['Close'] - df_daily['20MA']) / df_daily['20MA'] * 100
+        df_daily['Vol_Avg'] = df_daily['Volume'].rolling(window=20).mean()
+        
+        last_trading_value = df_daily['Close'].iloc[-1] * df_daily['Volume'].iloc[-1]
+        
+        std = df_daily['Close'].rolling(window=20).std()
+        df_daily['Upper_2sigma'] = df_daily['20MA'] + (std * 2)
+        
+        last = df_daily.iloc[-1]
+        prev = df_daily.iloc[-2] 
+        
+        if last_trading_value < 1000000000:
+            return False, None, None, None, None, None
+
+        trend_daily = (last['Close'] > last['5MA'] > last['20MA']) and (last['Close'] > last['75MA'])
+        today_is_bullish = last['Close'] > last['Open']
+        prev_is_bullish = prev['Close'] > prev['Open']
+        is_gap_up = last['Open'] > prev['Close']
+        candle_ok = today_is_bullish or (prev_is_bullish and is_gap_up)
+        vol_ok = last['Volume'] > last['Vol_Avg']
+        rsi_safe = last['RSI'] < 75
+        dev_safe = last['20MA_Dev'] < 10
+        bb_safe = last['Close'] < last['Upper_2sigma']
+
+        df_weekly = ticker.history(period="1y", interval="1wk")
+        last_w = df_weekly.iloc[-1]
+        df_weekly['5MA'] = df_weekly['Close'].rolling(window=5).mean()
+        df_weekly['20MA'] = df_weekly['Close'].rolling(window=20).mean()
+        trend_weekly = (last_w['Close'] > df_weekly['5MA'].iloc[-1] > df_weekly['20MA'].iloc[-1])
+
+        if not (trend_daily and trend_weekly and candle_ok and vol_ok and rsi_safe and dev_safe and bb_safe):
+            return False, None, None, None, None, None
+
+        info_data = ticker.info
+        name = info_data.get('shortName') or '不明'
+        sector = info_data.get('sector') or '不明'
+        
+        earnings_date = "不明"
+        try:
+            cal = ticker.calendar
+            if isinstance(cal, dict) and 'Earnings Date' in cal:
+                dates = cal['Earnings Date']
+                if len(dates) > 0 and pd.notna(dates[0]):
+                    earnings_date = dates[0].strftime('%Y/%m/%d')
+            elif isinstance(cal, pd.DataFrame) and 'Earnings Date' in cal.index:
+                date_val = cal.loc['Earnings Date'].iloc[0]
+                if pd.notna(date_val):
+                    earnings_date = date_val.strftime('%Y/%m/%d')
+        except Exception:
+            pass
+        
+        # 特記事項（GU特例など）
+        note = "GU特例" if (not today_is_bullish and candle_ok) else ""
+            
+        return True, last['Close'], last['RSI'], name, sector, earnings_date, note
+
+    except Exception as e:
+        return False, None, None, None, None, None, None
+
+# --- UIと実行部分 ---
+if st.button('🔍 スキャン開始', type='primary', use_container_width=True):
     results = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    
+    progress_text = "銘柄をスキャンしています。そのままお待ちください..."
+    my_bar = st.progress(0, text=progress_text)
+    status_area = st.empty()
+    
+    start_time = time.time()
+    total = len(tickers)
     
     for i, code in enumerate(tickers):
-        progress = (i + 1) / len(tickers)
-        progress_bar.progress(progress)
-        status_text.text(f"分析中: {code} ({i+1}/{len(tickers)})")
+        # プログレスバーの更新
+        progress = (i + 1) / total
+        my_bar.progress(progress, text=f"スキャン中... [{i+1}/{total}] {code}")
         
-        is_match, price, name, sector, e_date = check_ultimate_swing(code)
+        # 判定実行
+        is_match, price, rsi, name, sector, e_date, note = check_ultimate_swing(code)
+        
         if is_match:
             results.append({
-                "コード": code,
+                "コード": code.replace(".T", ""),
                 "銘柄名": name,
+                "終値(円)": f"{price:,.1f}",
+                "RSI(%)": f"{rsi:.0f}",
                 "セクター": sector,
-                "終値": price,
-                "決算予定": e_date
+                "決算予定": e_date,
+                "備考": note
             })
+            # 見つかったら画面に即時表示
+            status_area.success(f"⭐ お宝銘柄発見: {code} {name}")
             
-    status_text.text("✅ スキャン完了！")
+        # サーバー負荷軽減のわずかなスリープ
+        time.sleep(0.01)
+        
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    
+    my_bar.empty() # スキャン完了後はバーを消す
+    st.write(f"⏱️ 所要時間: {elapsed_time:.1f}秒")
+    
+    st.markdown("---")
+    st.subheader("📋 【厳選銘柄リスト】")
     
     if results:
-        st.success(f"お宝銘柄が {len(results)} 件見つかりました！")
         df_res = pd.DataFrame(results)
-        st.dataframe(df_res, use_container_width=True)
+        # 表を表示
+        st.dataframe(df_res, use_container_width=True, hide_index=True)
         
-        # CSVダウンロード機能
-        csv = df_res.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📥 結果をCSVで保存", csv, "scan_result.csv", "text/csv")
+        # CSVダウンロード機能（ターミナルのテキスト保存の代わり）
+        now_str = datetime.now().strftime('%Y%m%d_%H%M')
+        csv = df_res.to_csv(index=False).encode('utf-8-sig') # 文字化け防止のutf-8-sig
+        st.download_button(
+            label="📥 結果をCSVで保存",
+            data=csv,
+            file_name=f"アルティメット結果_{now_str}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
     else:
-        st.info("条件に一致する銘柄はありませんでした。")
+        st.info("現在、すべての条件を満たすお宝銘柄はありません。資金を温存しましょう。")
