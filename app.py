@@ -8,14 +8,13 @@ from datetime import datetime
 # yfinanceの一部の警告を非表示にする
 warnings.filterwarnings('ignore')
 
-# ページ設定（iPhoneで見やすいように）
+# ページ設定
 st.set_page_config(page_title="Ultimate Stock Screener", page_icon="📈", layout="wide")
 
 st.title("📈 アルティメット・スクリーナー")
 st.caption("対象：日経225＋JPX400＋プライム・スタンダード主力（全約580銘柄）")
 st.caption("条件：日/週PO ＋ 売買代金10億以上 ＋ RSI<75 ＋ BB+2σ以内 ＋ (陽線 or 前日陽線&GU)")
 
-# 母集団：日経225 + JPX400 + プライム・スタンダード主力（全約580銘柄）
 tickers = sorted(list(set([
     "1332.T", "1414.T", "1605.T", "1719.T", "1720.T", "1721.T", "1801.T", "1802.T", "1803.T", "1808.T",
     "1812.T", "1820.T", "1821.T", "1860.T", "1861.T", "1878.T", "1893.T", "1911.T", "1925.T", "1928.T",
@@ -61,7 +60,7 @@ tickers = sorted(list(set([
     "9602.T", "9613.T", "9627.T", "9684.T", "9697.T", "9719.T", "9735.T", "9766.T", "9843.T", "9962.T",
     "9983.T", "9984.T", "9989.T",
     
-    # --- 追加銘柄（人気中小型株・グロース・スタンダード主力） ---
+    # --- 追加銘柄 ---
     "2698.T", "2782.T", "3053.T", "3196.T", "3397.T", "3543.T", "7550.T", "7616.T", "8200.T", "9873.T",
     "9861.T", "9842.T", "7421.T", "7522.T", "7581.T", "7649.T", "9936.T", "9948.T", "9279.T", "3561.T",
     "3632.T", "3656.T", "3765.T", "3903.T", "3904.T", "3922.T", "3932.T", "3962.T", "3983.T", "3989.T",
@@ -78,7 +77,6 @@ tickers = sorted(list(set([
     "6035.T", "6036.T", "6058.T", "6080.T", "6095.T"
 ])))
 
-# コスケさんの計算ロジック（完全一致）
 def calculate_rsi(df, period=14):
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -91,11 +89,13 @@ def check_ultimate_swing(ticker_symbol):
         ticker = yf.Ticker(ticker_symbol)
         df_daily = ticker.history(period="1y", interval="1d")
         
-        # 上場して間もない等でデータが75日分ない場合は除外
+        # ★追加：クラウド特有の「出来高0」や「欠損」のバグデータを消す
+        df_daily = df_daily[df_daily['Volume'] > 0]
+        df_daily = df_daily.dropna(subset=['Close', 'Volume'])
+        
         if df_daily.empty or len(df_daily) < 75:
-            return False, "データ不足", None, None, None
+            return False, None, None, None, None, None, None
             
-        # --- 指標計算 ---
         df_daily['5MA'] = df_daily['Close'].rolling(window=5).mean()
         df_daily['20MA'] = df_daily['Close'].rolling(window=20).mean()
         df_daily['75MA'] = df_daily['Close'].rolling(window=75).mean()
@@ -103,135 +103,91 @@ def check_ultimate_swing(ticker_symbol):
         df_daily['20MA_Dev'] = (df_daily['Close'] - df_daily['20MA']) / df_daily['20MA'] * 100
         df_daily['Vol_Avg'] = df_daily['Volume'].rolling(window=20).mean()
         
-        # 売買代金の計算（最新の終値 × 出来高）
         last_trading_value = df_daily['Close'].iloc[-1] * df_daily['Volume'].iloc[-1]
-        
-        # ボリンジャーバンド (+2σ)
         std = df_daily['Close'].rolling(window=20).std()
         df_daily['Upper_2sigma'] = df_daily['20MA'] + (std * 2)
         
         last = df_daily.iloc[-1]
-        prev = df_daily.iloc[-2]  # 前日のデータ
+        prev = df_daily.iloc[-2] 
         
-        # --- 条件判定 ---
-        # 0. 流動性フィルタ：本日の売買代金が10億円(1,000,000,000)未満は除外
-        if last_trading_value < 1000000000:
-            return False, f"流動性不足({last_trading_value/100000000:.1f}億円)", None, None, None
-
-        # 1. トレンド (日足パーフェクトオーダー & 75日線上)
+        # 条件判定
         trend_daily = (last['Close'] > last['5MA'] > last['20MA']) and (last['Close'] > last['75MA'])
-        
-        # 2. ローソク足条件（陽線、またはギャップアップ特例）
         today_is_bullish = last['Close'] > last['Open']
         prev_is_bullish = prev['Close'] > prev['Open']
         is_gap_up = last['Open'] > prev['Close']
-        
-        # 本日が陽線、または「前日陽線 かつ 本日ギャップアップ」なら合格
         candle_ok = today_is_bullish or (prev_is_bullish and is_gap_up)
-        
-        # 3. 出来高 (20日平均より多いか)
         vol_ok = last['Volume'] > last['Vol_Avg']
-        
-        # 4. 安全フィルター (買われすぎ防止)
         rsi_safe = last['RSI'] < 75
         dev_safe = last['20MA_Dev'] < 10
         bb_safe = last['Close'] < last['Upper_2sigma']
 
-        # 週足の確認 (長期トレンドの担保)
         df_weekly = ticker.history(period="1y", interval="1wk")
+        
+        # ★追加：週足でもバグデータを消す
+        df_weekly = df_weekly[df_weekly['Volume'] > 0]
+        df_weekly = df_weekly.dropna(subset=['Close'])
+
+        if df_weekly.empty or len(df_weekly) < 20:
+            return False, None, None, None, None, None, None
+
         last_w = df_weekly.iloc[-1]
         df_weekly['5MA'] = df_weekly['Close'].rolling(window=5).mean()
         df_weekly['20MA'] = df_weekly['Close'].rolling(window=20).mean()
         trend_weekly = (last_w['Close'] > df_weekly['5MA'].iloc[-1] > df_weekly['20MA'].iloc[-1])
 
-        # 一つでも条件を満たさなければ False を返す
-        if not (trend_daily and trend_weekly): return False, "トレンド未達", None, None, None
-        if not candle_ok: return False, "陰線/停滞(特例なし)", None, None, None
-        if not vol_ok: return False, "活況不足", None, None, None
-        if not rsi_safe: return False, f"過熱(RSI:{last['RSI']:.0f}%)", None, None, None
-        if not dev_safe: return False, f"乖離過大({last['20MA_Dev']:.1f}%)", None, None, None
-        if not bb_safe: return False, "+2σ超過", None, None, None
+        # 条件に合わない場合
+        if not (trend_daily and trend_weekly and candle_ok and vol_ok and rsi_safe and dev_safe and bb_safe) or last_trading_value < 1000000000:
+            return False, None, None, None, None, None, None
 
-        # --- 全てクリアした場合のみ、企業情報（業種など）と決算日を取得 ---
+        # 合致した場合の情報取得
         info_data = ticker.info
         name = info_data.get('shortName') or '不明'
-        sector = info_data.get('sector') or '分類不明'
+        sector = info_data.get('sector') or '不明'
         
-        # 決算日の取得（取得できない場合は「不明」とする）
         earnings_date = "不明"
         try:
             cal = ticker.calendar
             if isinstance(cal, dict) and 'Earnings Date' in cal:
-                dates = cal['Earnings Date']
-                if len(dates) > 0 and pd.notna(dates[0]):
-                    earnings_date = dates[0].strftime('%Y/%m/%d')
-            elif isinstance(cal, pd.DataFrame) and 'Earnings Date' in cal.index:
-                date_val = cal.loc['Earnings Date'].iloc[0]
-                if pd.notna(date_val):
-                    earnings_date = date_val.strftime('%Y/%m/%d')
-        except Exception:
+                earnings_date = cal['Earnings Date'][0].strftime('%Y/%m/%d')
+        except:
             pass
         
         info_text = f"終値:{last['Close']:,.1f}円 (RSI:{last['RSI']:.0f}%)"
         if not today_is_bullish and candle_ok:
             info_text += " ※GU特例"
             
-        return True, info_text, name, sector, earnings_date
+        return True, info_text, name, sector, earnings_date, last['Close'], last['RSI']
 
-    except Exception as e:
-        return False, "データ取得エラー", None, None, None
+    except Exception:
+        return False, None, None, None, None, None, None
 
-# --- アプリの画面（UI）と実行部分 ---
+# --- UIと実行 ---
 if st.button('🔍 スキャン開始', type='primary', use_container_width=True):
     results = []
-    
-    # 進行状況を画面に出す準備
-    my_bar = st.progress(0, text="準備中...")
+    my_bar = st.progress(0, text="スキャン中...")
     status_area = st.empty()
-    
     total = len(tickers)
-    start_time = time.time()
     
     for i, code in enumerate(tickers):
-        # バーを更新
         my_bar.progress((i + 1) / total, text=f"スキャン中... [{i+1}/{total}] {code}")
         
-        # ★ ここがターミナルと全く同じ実行部分です
-        is_match, info, name, sector, e_date = check_ultimate_swing(code)
+        is_match, info, name, sector, e_date, price, rsi = check_ultimate_swing(code)
         
         if is_match:
-            # 合格した銘柄だけリストに追加（表用データ）
             results.append({
                 "コード": code.replace(".T", ""),
                 "銘柄名": name,
-                "詳細情報": info, # あなたのターミナルと同じ文字列が入ります
+                "詳細情報": info,
                 "セクター": sector,
                 "決算予定": e_date
             })
-            status_area.success(f"✅ {name} [{sector}] 📅決算:{e_date} | {info}")
+            status_area.success(f"⭐ 発見: {code} {name}")
             
-    end_time = time.time()
-    
-    my_bar.empty() # 終わったらバーを消す
-    st.write(f"⏱️ 所要時間: {end_time - start_time:.1f}秒")
-    
+    my_bar.empty()
     st.markdown("---")
     
     if results:
-        st.subheader(f"📋 【厳選銘柄リスト】 ({len(results)}件)")
-        df_res = pd.DataFrame(results)
-        st.dataframe(df_res, use_container_width=True, hide_index=True)
-        
-        # ターミナルで `y` を押して保存していた機能の代わり
-        now = datetime.now()
-        filename = f"アルティメット結果_{now.strftime('%Y%m%d_%H%M')}.csv"
-        csv = df_res.to_csv(index=False).encode('utf-8-sig')
-        st.download_button(
-            label="📥 結果をCSVで保存",
-            data=csv,
-            file_name=filename,
-            mime="text/csv",
-            use_container_width=True
-        )
+        st.subheader(f"📋 厳選銘柄リスト ({len(results)}件)")
+        st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
     else:
         st.info("現在、すべての条件を満たすお宝銘柄はありません。資金を温存しましょう。")
